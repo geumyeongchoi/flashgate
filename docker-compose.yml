@@ -55,19 +55,19 @@ services:
       SPRING_PROFILES_ACTIVE: sentinel
       REDIS_SENTINELS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
       KAFKA_BOOTSTRAP: kafka:19092
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/flashgate
-    depends_on: [sentinel-1, kafka, mysql]
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.flash.rule=PathPrefix(`/`)
-      - traefik.http.services.flash.loadbalancer.server.port=8080
-      - traefik.http.services.flash.loadbalancer.healthcheck.path=/actuator/health/readiness
-      - traefik.http.services.flash.loadbalancer.healthcheck.interval=2s
+      DB_URL: jdbc:mysql://mysql:3306/flashgate
+    depends_on:
+      mysql: { condition: service_healthy }
+      kafka: { condition: service_started }
+      sentinel-1: { condition: service_started }
+    restart: on-failure
   app-2:
     <<: *app
 
   traefik:
     image: traefik:v3.3
-    command: ["--providers.docker=true", "--providers.docker.exposedbydefault=false", "--entrypoints.web.address=:8080", "--api.insecure=true"]
-    ports: ["8090:8080", "8091:8080"]   # 8090 = 앱(LB), 8091 = Traefik 대시보드
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    # docker provider 대신 파일 프로바이더 — Docker Engine 29 는 v3.3 의 구버전 API 호출을 400 으로 거절한다
+    command: ["--providers.file.filename=/etc/traefik/dynamic.yml", "--providers.file.watch=true", "--entrypoints.web.address=:80", "--api.insecure=true", "--accesslog=false"]
+    ports: ["8090:80", "8091:8080"]     # 8090 = 앱(LB), 8091 = Traefik 대시보드
+    volumes: ["./docker/traefik-dynamic.yml:/etc/traefik/dynamic.yml:ro"]
+    depends_on: [app-1, app-2]

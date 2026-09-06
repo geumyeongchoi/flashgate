@@ -1,0 +1,23 @@
+# Traefik 파일 프로바이더 설정 — docker provider 는 Docker Engine 29(API≥1.44 강제)에서 v3.3 클라이언트가 거절되어 사용하지 않음
+http:
+  routers:
+    flash:
+      rule: "PathPrefix(`/`)"
+      entryPoints: [web]
+      service: flash
+      middlewares: [retry-once]
+  middlewares:
+    retry-once:
+      retry:
+        attempts: 2            # 죽은 백엔드로 간 요청을 다른 서버로 1회 재시도 (멱등키가 있어 안전)
+        initialInterval: 50ms
+  services:
+    flash:
+      loadBalancer:
+        servers:
+          - url: "http://app-1:8080"
+          - url: "http://app-2:8080"
+        healthCheck:
+          path: /actuator/health/readiness
+          interval: 1s
+          timeout: 500ms

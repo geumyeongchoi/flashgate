@@ -1,0 +1,7 @@
+[11:05:31] killing redis-master (current master ip=172.20.0.3)
+ Container flashgate-redis-master-1 Killing 
+ Container flashgate-redis-master-1 Killed 
+scripts/chaos-kill-redis-master.sh: line 10: 17886603353N: value too great for base (error token is "17886603353N")
+[11:05:55] restarting old master as replica
+ Container flashgate-redis-master-1 Starting 
+ Container flashgate-redis-master-1 Started 

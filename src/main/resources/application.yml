@@ -47,18 +47,21 @@ resilience4j:
     failure-rate-threshold: 50
     wait-duration-in-open-state: 3s
     permitted-number-of-calls-in-half-open-state: 5
-    ignore-exceptions:
-      - dev.gychoi.flashgate.api.ProblemException
+    record-exceptions:
+      - org.springframework.dao.DataAccessException
+      - io.lettuce.core.RedisException
   retry.instances.redis:
     max-attempts: 3
     wait-duration: 50ms
     enable-exponential-backoff: true
     exponential-backoff-multiplier: 2
-    retry-exceptions:
+    retry-exceptions:                     # failover 중 나오는 예외들: 연결 끊김 / 타임아웃 / READONLY replica 에 쓰기
       - io.lettuce.core.RedisConnectionException
       - io.lettuce.core.RedisCommandTimeoutException
       - org.springframework.data.redis.RedisConnectionFailureException
       - org.springframework.data.redis.RedisSystemException
+      - org.springframework.dao.QueryTimeoutException
+      - org.springframework.dao.DataAccessResourceFailureException
 
 management:
   endpoints.web.exposure.include: health,prometheus,metrics,circuitbreakers

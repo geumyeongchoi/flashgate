@@ -2,6 +2,7 @@
 // 성공 판정: 201/202 정확히 100건, 409(품절) 나머지, 5xx 0건, p99 < 20ms
 import http from 'k6/http';
 import { check } from 'k6';
+http.setResponseCallback(http.expectedStatuses(200, 202, 409));
 import { Counter, Trend } from 'k6/metrics';
 
 const reserved = new Counter('orders_reserved');
@@ -9,6 +10,7 @@ const soldOut = new Counter('orders_sold_out');
 const latency = new Trend('reserve_latency', true);
 
 export const options = {
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   scenarios: {
     spike: {
       executor: 'ramping-arrival-rate',
@@ -32,10 +34,11 @@ const PRODUCT = __ENV.PRODUCT_ID || '1';
 export function setup() {
   http.post(`${BASE}/api/admin/products/${PRODUCT}/stock`, JSON.stringify({ quantity: 100 }),
     { headers: { 'Content-Type': 'application/json' } });
+  return { run: Date.now().toString(36) };   // 실행마다 고유 → 멱등키가 이전 실행과 겹치지 않게
 }
 
-export default function () {
-  const userId = `u-${__VU}-${__ITER}`;
+export default function (data) {
+  const userId = `u-${data.run}-${__VU}-${__ITER}`;
   const res = http.post(`${BASE}/api/orders`,
     JSON.stringify({ productId: Number(PRODUCT), userId }),
     { headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `${userId}-${PRODUCT}` } });
@@ -46,7 +49,8 @@ export default function () {
 }
 
 export function handleSummary(data) {
-  const r = data.metrics.orders_reserved ? data.metrics.orders_reserved.values.count : 0;
-  const md = `# spike ${new Date().toISOString()}\n\n| 지표 | 값 |\n|---|---|\n| 예약 성공 | ${r} (기대 100) |\n| 품절 응답 | ${data.metrics.orders_sold_out?.values.count ?? 0} |\n| 5xx 비율 | ${(data.metrics.http_req_failed.values.rate * 100).toFixed(3)}% |\n| p50 | ${data.metrics.reserve_latency.values['p(50)'].toFixed(2)} ms |\n| p99 | ${data.metrics.reserve_latency.values['p(99)'].toFixed(2)} ms |\n| 처리량 | ${data.metrics.http_reqs.values.rate.toFixed(0)} rps |\n`;
+  const m = (name, key) => (data.metrics[name] && data.metrics[name].values[key] != null) ? data.metrics[name].values[key] : 0;
+  const r = m('orders_reserved', 'count');
+  const md = `# spike ${new Date().toISOString()}\n\n| 지표 | 값 |\n|---|---|\n| 예약 성공 | ${r} (기대 100) |\n| 품절 응답 | ${m('orders_sold_out', 'count')} |\n| 5xx 비율 | ${(m('http_req_failed', 'rate') * 100).toFixed(3)}% |\n| p50 | ${m('reserve_latency', 'med').toFixed(2)} ms |\n| p95 | ${m('reserve_latency', 'p(95)').toFixed(2)} ms |\n| p99 | ${m('reserve_latency', 'p(99)').toFixed(2)} ms |\n| max | ${m('reserve_latency', 'max').toFixed(2)} ms |\n| 처리량 | ${m('http_reqs', 'rate').toFixed(0)} rps |\n`;
   return { 'k6/results/spike-latest.md': md, stdout: md };
 }

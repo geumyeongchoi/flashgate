@@ -98,6 +98,7 @@ class StockRedisRepository(
 
     override fun get(key: String): String? = redis.opsForValue().get("idem:$key")
 
+    /** Retry 소진·서킷 오픈·기타 Redis 예외 → 503 로 빠르게 실패(큐잉 금지). 도메인 결과(품절 등)는 예외가 아니므로 여기 오지 않는다. */
     @Suppress("unused", "UNUSED_PARAMETER")
     private fun reserveFallback(
         productId: Long,
@@ -105,7 +106,10 @@ class StockRedisRepository(
         orderId: String,
         ttlSeconds: Long,
         t: Throwable,
-    ): ReserveOutcome = throw StockUnavailableException("redis unavailable (circuit open or retries exhausted)", t)
+    ): ReserveOutcome {
+        if (t is IllegalStateException) throw t // "unexpected lua result" 같은 프로그래밍 오류는 그대로
+        throw StockUnavailableException("redis unavailable: ${t.javaClass.simpleName}", t)
+    }
 
     private fun keys(
         productId: Long,

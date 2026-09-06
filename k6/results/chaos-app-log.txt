@@ -1,0 +1,12 @@
+[11:06:41] kill app-2
+ Container flashgate-app-2-1 Killing 
+ Container flashgate-app-2-1 Killed 
+[11:07:02] restart app-2
+ Container flashgate-redis-master-1 Running 
+ Container flashgate-mysql-1 Running 
+ Container flashgate-kafka-1 Running 
+ Container flashgate-sentinel-1-1 Running 
+ Container flashgate-mysql-1 Waiting 
+ Container flashgate-mysql-1 Healthy 
+ Container flashgate-app-2-1 Starting 
+ Container flashgate-app-2-1 Started 

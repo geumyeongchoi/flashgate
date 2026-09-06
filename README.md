@@ -31,16 +31,33 @@ client ─▶ Traefik ─▶ [flashgate-api ×2]  (Kotlin 2.2 · Spring Boot 3.5
 - Kafka: 아웃박스로 at-least-once, 컨슈머는 `idempotencyKey` 유니크로 중복 무해화
 - 재고 정합: 매 1분 `Redis 잔여 + MySQL 확정 + 취소 = 초기 재고` 대사 잡, 불일치 시 메트릭 알람
 
-## 3. 설계 판단 — 대안 비교 (Day 8에 수치로 채움)
+## 3. 실측 결과 (2026-09-06 · MacBook Pro Apple Silicon · Docker Desktop · 앱 2대 + Sentinel 3 + Traefik, k6 v2.2)
 
-| 방식 | 정확성 | p99 (동시 1,000) | 처리량 | 비고 |
-|---|---|---|---|---|
-| DB `SELECT … FOR UPDATE` | ✔ | __ ms | __ rps | 커넥션 풀 고갈, 데드락 위험 |
-| Redisson 분산락 + DB | ✔ | __ ms | __ rps | 락 획득 대기가 트래픽에 비례 |
-| **Redis Lua 원자 차감 (채택)** | ✔ | __ ms | __ rps | 단일 라운드트립, 락 없음 |
-| Redis `DECR` 만 | ✘(음수 재고) | — | — | 비교용 실패 사례 |
+원본: `k6/results/*.md`. 모든 수치는 로컬 Docker 환경 값이며 서버 배포 후 재측정한다(HARD-GATE #4: 추정치 기재 금지).
 
-추가 비교: Kotlin 코루틴(WebFlux) vs **가상 스레드(MVC, 채택)** — 코드 단순성 대비 p99 차이가 미미하면 MVC 유지(측정 후 결정).
+| 시나리오 | 요청 | 처리량 | 5xx | p50 | p95 | p99 | 비고 |
+|---|---|---|---|---|---|---|---|
+| spike — 재고 100, 5,000명 스파이크 10s | 15,149 | 1,496 rps | 0 | 1.6 ms | 7.9 ms | 27.6 ms | 예약 성공 110 = 100 + 결제 거절(5%) 보상으로 되돌아온 재고 재판매. **초과판매 0** (Redis 잔여 0 · reserved 100) |
+| ramp — 100→1,000 rps 55s, 재고 10만 | 39,001 | 709 rps | 0 | 2.0 ms | 20.7 ms | 27.3 ms | k6 arrival-rate 가 VU 제한으로 709 rps 에서 포화(측정 클라이언트 한계) |
+| chaos — **Redis master kill** 중 300 rps 60s | 18,001 | 300 rps | 503 ×1,021 (5.7%) | 1.9 ms | — | 203 ms | 실패는 전부 503 + Retry-After(빠른 실패), 500·타임아웃 0. 실패 창 ≈ 3.4s (down-after 2s + 선출). 1차 시도(down-after 5s, 예외 매핑 전)는 500 ×2,433 (13.5%) |
+| chaos — **앱 1대 SIGKILL** 중 300 rps 60s | 18,002 | 300 rps | 18 (0.10%) | 2.0 ms | — | 35 ms | Traefik retry 미들웨어(다른 서버로 1회 재시도) 적용 후. 적용 전 1.5% |
+
+동시성 정확성은 통합 테스트로 고정: 가상 스레드 1,000개 동시 예약 → **202 정확히 100 · 409 900 · 초과판매 0**, 이후 MySQL CONFIRMED 100, 대사 일치 (`ReserveFlowIntegrationTest`, 1.9s).
+
+### 설계 판단 — 대안 비교
+
+| 방식 | 정확성 | 지연 특성 | 상태 |
+|---|---|---|---|
+| **Redis Lua 원자 차감 (채택)** | ✔ 초과판매 0 실측 | 왕복 1회, 락 없음 — p50 1.6~2.0 ms | 구현·측정 완료 |
+| DB `SELECT … FOR UPDATE` | ✔ | 커넥션 풀 고갈·락 대기가 트래픽에 비례 | 비교 구현 예정(Day 8 잔여) |
+| Redisson 분산락 + DB | ✔ | 락 획득 대기 + 2 왕복 | 비교 구현 예정(Day 8 잔여) |
+| Redis `DECR` 만 | ✘ 음수 재고 | — | 비교용 실패 사례 |
+
+장애 대응 설계에서 얻은 것
+- **failover 창의 실패는 "빠른 503"으로 바꾸는 것이 목표**이고 0으로 만드는 것이 목표가 아니다. Retry(50→100→200ms)는 수 초의 failover 를 덮을 수 없으므로, 남는 요청은 503 + Retry-After 로 즉시 돌려보내 큐잉·지연 폭증을 막는다. 클라이언트 재시도가 멱등키로 안전하다.
+- Sentinel `down-after-milliseconds` 5s→2s 로 실패 창을 절반 이하로. 더 줄이면 오탐 failover 위험.
+- 예외 매핑이 빠지면 같은 장애가 500 으로 보인다(1차 13.5% → 2차 5.7%, 전부 503). READONLY replica 쓰기·타임아웃·연결 끊김을 Retry/CB 대상과 problem+json 503 으로 명시.
+- 인스턴스 SIGKILL 은 Traefik 헬스체크(1s)만으로는 1.5% 실패 → 멱등키가 있으니 **프록시 재시도 1회**를 켜서 0.1%.
 
 ## 4. 기능 범위 (Day 6~8)
 
@@ -80,7 +97,7 @@ scripts/verify.sh --fast | --full          # 단위·아키텍처 / + Testcontai
 핵심 테스트: `ReserveFlowIntegrationTest` — 가상 스레드 1,000개가 동시에 재고 100개를 예약 → **202 정확히 100건 · 409 900건 · 초과판매 0**, 아웃박스→Kafka→컨슈머로 MySQL에 CONFIRMED 100건, 대사 일치.
 
 ## 6. 이력서/면접 포인트
-- "왜 Lua인가" → 확인+차감+기록을 원자화해 락 없이 정확. 대안 3종과 p99 비교 표.
-- "Redis가 죽으면?" → Sentinel failover __초, 그동안 Retry가 흡수한 요청 __건, 서킷 오픈 __회, 최종 실패율 __%.
+- "왜 Lua인가" → 확인+차감+기록을 원자화해 락 없이 정확(초과판매 0 실측). p50 1.6ms.
+- "Redis가 죽으면?" → Sentinel failover 창 ≈3.4s, 그 안의 요청은 503+Retry-After 로 빠른 실패(5.7%), 500·타임아웃 0. 예외 매핑 전엔 500 13.5%.
 - "중복 주문은?" → Lua에서 유저 중복 체크 + 멱등키 + 컨슈머 유니크 제약, 3중.
 - "재고 정합성은 어떻게 보장?" → 아웃박스 at-least-once + 보상 트랜잭션 + 1분 대사.
