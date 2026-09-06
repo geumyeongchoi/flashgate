@@ -1,0 +1,73 @@
+# 로컬 HA 재현: Redis Sentinel(3) + Kafka(KRaft) + MySQL + 앱 2대 + Traefik
+services:
+  redis-master:
+    image: redis:7.4
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["56379:6379"]   # 로컬 standalone 개발용(사내 Redis 6379와 충돌 방지)
+  redis-replica-1:
+    image: redis:7.4
+    command: ["redis-server", "--replicaof", "redis-master", "6379"]
+    depends_on: [redis-master]
+  redis-replica-2:
+    image: redis:7.4
+    command: ["redis-server", "--replicaof", "redis-master", "6379"]
+    depends_on: [redis-master]
+  sentinel-1: &sentinel
+    image: redis:7.4
+    command: ["sh", "-c", "cp /conf/sentinel.conf /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"]
+    volumes: ["./docker/sentinel.conf:/conf/sentinel.conf:ro"]
+    ports: ["26379:26379"]
+    depends_on: [redis-master]
+  sentinel-2:
+    <<: *sentinel
+    ports: ["26380:26379"]
+  sentinel-3:
+    <<: *sentinel
+    ports: ["26381:26379"]
+
+  kafka:
+    image: apache/kafka:3.9.1
+    ports: ["59092:9092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,EXTERNAL://localhost:59092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: flashgate
+      MYSQL_USER: flashgate
+      MYSQL_PASSWORD: flashgate
+      MYSQL_ROOT_PASSWORD: root
+    ports: ["53306:3306"]
+    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "localhost"], interval: 5s }
+
+  app-1: &app
+    build: .
+    environment: &appenv
+      SPRING_PROFILES_ACTIVE: sentinel
+      REDIS_SENTINELS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+      KAFKA_BOOTSTRAP: kafka:19092
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/flashgate
+    depends_on: [sentinel-1, kafka, mysql]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.flash.rule=PathPrefix(`/`)
+      - traefik.http.services.flash.loadbalancer.server.port=8080
+      - traefik.http.services.flash.loadbalancer.healthcheck.path=/actuator/health/readiness
+      - traefik.http.services.flash.loadbalancer.healthcheck.interval=2s
+  app-2:
+    <<: *app
+
+  traefik:
+    image: traefik:v3.3
+    command: ["--providers.docker=true", "--providers.docker.exposedbydefault=false", "--entrypoints.web.address=:8080", "--api.insecure=true"]
+    ports: ["8090:8080", "8091:8080"]   # 8090 = 앱(LB), 8091 = Traefik 대시보드
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]

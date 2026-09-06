@@ -1,0 +1,8 @@
+flashgate:
+  payment:
+    failure-rate: 0
+    min-latency-ms: 0
+    max-latency-ms: 0
+  outbox:
+    poll-interval: 50ms
+logging.level.dev.gychoi.flashgate: DEBUG

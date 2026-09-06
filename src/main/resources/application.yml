@@ -1,0 +1,77 @@
+spring:
+  application.name: flashgate
+  threads.virtual.enabled: true          # JDK 21 가상 스레드 — 코루틴/WebFlux 대비 비교 대상(Day 8)
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:53306/flashgate}
+    username: ${DB_USER:flashgate}
+    password: ${DB_PASSWORD:flashgate}
+    hikari:
+      maximum-pool-size: 10               # 핫패스는 outbox INSERT 1건뿐 → 풀 작게 유지
+  flyway.enabled: true
+  data.redis:                             # 기본 = 단일 Redis(로컬 개발·테스트). HA는 profile=sentinel (docker compose 앱 서비스)
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:56379}
+    timeout: 200ms                        # 핫패스 타임아웃 — 느린 Redis에 매달리지 않는다
+    lettuce.shutdown-timeout: 100ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:59092}
+    producer:
+      acks: all
+      properties.enable.idempotence: true
+    consumer:
+      group-id: order-confirm
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    listener.ack-mode: manual
+  lifecycle.timeout-per-shutdown-phase: 30s
+
+server:
+  shutdown: graceful
+
+flashgate:
+  reservation-ttl: 10m
+  idempotency-ttl: 24h
+  outbox:
+    poll-interval: 100ms
+    batch-size: 200
+  payment:
+    failure-rate: 0.05
+    min-latency-ms: 50
+    max-latency-ms: 200
+
+resilience4j:
+  circuitbreaker.instances.redis:
+    sliding-window-type: COUNT_BASED
+    sliding-window-size: 50
+    minimum-number-of-calls: 20
+    failure-rate-threshold: 50
+    wait-duration-in-open-state: 3s
+    permitted-number-of-calls-in-half-open-state: 5
+    ignore-exceptions:
+      - dev.gychoi.flashgate.api.ProblemException
+  retry.instances.redis:
+    max-attempts: 3
+    wait-duration: 50ms
+    enable-exponential-backoff: true
+    exponential-backoff-multiplier: 2
+    retry-exceptions:
+      - io.lettuce.core.RedisConnectionException
+      - io.lettuce.core.RedisCommandTimeoutException
+      - org.springframework.data.redis.RedisConnectionFailureException
+      - org.springframework.data.redis.RedisSystemException
+
+management:
+  endpoints.web.exposure.include: health,prometheus,metrics,circuitbreakers
+  endpoint.health.probes.enabled: true
+
+logging.level:
+  dev.gychoi.flashgate: INFO
+
+---
+# Redis Sentinel HA — docker compose 의 app-1/app-2 가 이 프로파일로 뜬다
+spring:
+  config.activate.on-profile: sentinel
+  data.redis:
+    sentinel:
+      master: mymaster
+      nodes: ${REDIS_SENTINELS:sentinel-1:26379,sentinel-2:26379,sentinel-3:26379}
