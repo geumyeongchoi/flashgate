@@ -1,6 +1,7 @@
 package dev.gychoi.flashgate.api
 
 import dev.gychoi.flashgate.infra.redis.StockUnavailableException
+import dev.gychoi.flashgate.infra.strategy.LockTimeoutException
 import org.springframework.dao.DataAccessException
 import org.springframework.dao.DataAccessResourceFailureException
 import org.springframework.dao.QueryTimeoutException
@@ -25,6 +26,12 @@ class ProblemHandler {
     @ExceptionHandler(ProblemException::class)
     fun problem(e: ProblemException): ProblemDetail =
         ProblemDetail.forStatusAndDetail(e.status, e.message).apply { type = URI.create("urn:flashgate:${e.type}") }
+
+    @ExceptionHandler(LockTimeoutException::class)
+    fun lockTimeout(e: LockTimeoutException): ResponseEntity<ProblemDetail> =
+        unavailable(
+            StockUnavailableException(e.message ?: "lock timeout", e),
+        )
 
     @ExceptionHandler(StockUnavailableException::class)
     fun unavailable(e: StockUnavailableException): ResponseEntity<ProblemDetail> {

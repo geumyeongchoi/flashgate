@@ -23,6 +23,7 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
 
+    implementation("org.redisson:redisson-spring-boot-starter:3.50.0") // 대안 비교(strategy=redisson) 전용
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.3.0")
     implementation("org.springframework.boot:spring-boot-starter-aop") // resilience4j 어노테이션 프록시
     implementation("io.micrometer:micrometer-registry-prometheus")

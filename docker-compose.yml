@@ -53,6 +53,7 @@ services:
     build: .
     environment: &appenv
       SPRING_PROFILES_ACTIVE: sentinel
+      FLASHGATE_STRATEGY: ${FLASHGATE_STRATEGY:-lua}
       REDIS_SENTINELS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:mysql://mysql:3306/flashgate

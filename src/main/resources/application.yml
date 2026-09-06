@@ -29,6 +29,7 @@ server:
   shutdown: graceful
 
 flashgate:
+  strategy: ${FLASHGATE_STRATEGY:lua}      # lua(채택) | dblock | redisson — 대안 비교 벤치마크용
   reservation-ttl: 10m
   idempotency-ttl: 24h
   outbox:
