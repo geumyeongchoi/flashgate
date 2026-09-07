@@ -71,7 +71,7 @@ jib {
     from { image = "eclipse-temurin:21-jre" }
     container {
         ports = listOf("8080")
-        jvmFlags = listOf("-XX:MaxRAMPercentage=70", "-XX:+UseZGC", "-Djava.security.egd=file:/dev/./urandom")
+        jvmFlags = listOf("-Djava.security.egd=file:/dev/./urandom") // GC·힙은 배포 환경(JAVA_TOOL_OPTIONS)에서 결정
         creationTime.set("USE_CURRENT_TIMESTAMP")
         user = "1000:1000"
     }
