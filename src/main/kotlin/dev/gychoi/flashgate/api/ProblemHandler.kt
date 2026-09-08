@@ -2,6 +2,7 @@ package dev.gychoi.flashgate.api
 
 import dev.gychoi.flashgate.infra.redis.StockUnavailableException
 import dev.gychoi.flashgate.infra.strategy.LockTimeoutException
+import org.slf4j.LoggerFactory
 import org.springframework.dao.DataAccessException
 import org.springframework.dao.DataAccessResourceFailureException
 import org.springframework.dao.QueryTimeoutException
@@ -23,6 +24,8 @@ class ProblemException(
 /** RFC 9457 application/problem+json */
 @RestControllerAdvice
 class ProblemHandler {
+    private val log = LoggerFactory.getLogger(ProblemHandler::class.java)
+
     @ExceptionHandler(ProblemException::class)
     fun problem(e: ProblemException): ProblemDetail =
         ProblemDetail.forStatusAndDetail(e.status, e.message).apply { type = URI.create("urn:flashgate:${e.type}") }
@@ -47,6 +50,7 @@ class ProblemHandler {
             e is QueryTimeoutException || e is DataAccessResourceFailureException ||
                 e.javaClass.name.startsWith("org.springframework.data.redis")
         if (transient) return unavailable(StockUnavailableException("redis transient failure: ${e.javaClass.simpleName}", e))
+        log.error("데이터 접근 오류 → 500", e) // 조용한 500 금지: 원인을 남긴다
         val pd =
             ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "내부 오류").apply {
                 type =

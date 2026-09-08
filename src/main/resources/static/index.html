@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flashgate — 선착순 한정수량 주문 API</title>
+<meta name="description" content="재고 100개에 초당 수천 요청이 몰려도 초과판매 0건. Redis Lua 원자 예약 + 아웃박스/Kafka 확정. 지금 이 페이지에서 직접 부하를 걸어볼 수 있습니다.">
+<style>
+  :root{--ink:#16202b;--muted:#5f6b78;--dim:#8b95a1;--line:#e4e8ee;--bg:#f7f8fa;--card:#fff;--accent:#1f4fd1;--accent-soft:#eef2ff;--ok:#0a7a0a;--ok-bg:#e9f7e9;--warn:#9a6700;--warn-bg:#fff6e0;--crit:#b3261e;--crit-bg:#fdecec}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:34px 0 26px}
+  header h1{margin:0 0 4px;font-size:27px;letter-spacing:-.01em}
+  header .tag{color:var(--muted);margin:0 0 14px;font-size:15px}
+  header .links{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13.5px;align-items:center}
+  .pill{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .pill.up{background:var(--ok-bg);color:var(--ok)}
+  .pill.down{background:var(--crit-bg);color:var(--crit)}
+  section{padding:34px 0 4px}
+  h2{font-size:19px;margin:0 0 4px;letter-spacing:-.01em}
+  .lead{color:var(--muted);margin:0 0 18px;font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:22px 24px;margin:0 0 20px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0 0 22px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+  .kpi b{display:block;font-size:23px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:12px;color:var(--muted);line-height:1.5;display:block;margin-top:2px}
+  pre.arch{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:16px 18px;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto;margin:0}
+  .ctl{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:0 0 16px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:12px;color:var(--muted)}
+  .field input{width:130px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font:inherit;font-variant-numeric:tabular-nums}
+  button{padding:10px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+  button.ghost{background:#eef1f6;color:var(--ink)}
+  button:disabled{opacity:.45;cursor:default}
+  .res{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:4px 0 14px}
+  .res div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fbfcfd}
+  .res b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+  .res span{font-size:11.5px;color:var(--muted)}
+  .res .ok b{color:var(--ok)} .res .warn b{color:var(--warn)} .res .crit b{color:var(--crit)}
+  .verdict{padding:11px 14px;border-radius:9px;font-size:14px;font-weight:600;margin:0 0 14px;display:none}
+  .verdict.pass{background:var(--ok-bg);color:var(--ok)} .verdict.fail{background:var(--crit-bg);color:var(--crit)}
+  pre.log{background:#0f172a;color:#cbd5e1;border-radius:9px;padding:13px 15px;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:260px;overflow:auto;margin:0;white-space:pre-wrap}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:2px 0 8px}
+  th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;background:#f6f7fa}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  ul.tight{margin:6px 0 0 18px;padding:0}ul.tight li{margin:0 0 6px}
+  .note{font-size:12.5px;color:var(--dim);margin:10px 0 0}
+  footer{padding:30px 0 56px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);margin-top:28px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  @media(max-width:640px){.field input{width:100%}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>flashgate</h1>
+    <p class="tag">선착순 한정수량 주문 API — 재고 100개에 초당 수천 요청이 몰려도 <strong>초과판매 0건</strong>, 장애 중에도 요청이 죽지 않는다.</p>
+    <div class="links">
+      <span class="pill" id="health">헬스 확인 중…</span>
+      <a href="https://github.com/geumyeongchoi/flashgate" target="_blank" rel="noopener">GitHub 저장소</a>
+      <a href="/actuator/health" target="_blank" rel="noopener">/actuator/health</a>
+      <span style="color:var(--dim)">Kotlin · Spring Boot · JDK 21 가상 스레드 · Redis Lua · Kafka · MySQL · k3s</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="kpis">
+      <div class="kpi"><b>0건</b><span>초과판매 — 동시 1,000 요청, 재고 100</span></div>
+      <div class="kpi"><b>1,512 rps</b><span>스파이크 · p50 1.04ms · p99 14.8ms</span></div>
+      <div class="kpi"><b>5.67%</b><span>Redis 마스터 kill 중 실패 — 전부 503, 500은 0건</span></div>
+      <div class="kpi"><b>0.10%</b><span>앱 인스턴스 SIGKILL 중 실패</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>지금 직접 걸어보기</h2>
+    <p class="lead">이 페이지가 브라우저에서 직접 주문 API를 호출합니다. 재고를 초기화하고 동시에 여러 건을 쏘면, 성공은 재고 수만큼만 나오고 나머지는 409로 떨어집니다.</p>
+    <div class="card">
+      <div class="ctl">
+        <div class="field"><label for="qty">재고 수량</label><input id="qty" type="number" value="100" min="1" max="5000"></div>
+        <div class="field"><label for="n">동시 주문 요청 수</label><input id="n" type="number" value="300" min="1" max="1000"></div>
+        <button id="run">재고 초기화 후 동시에 주문 쏘기</button>
+        <button id="dup" class="ghost">같은 유저로 2번 (멱등키)</button>
+      </div>
+      <div class="verdict" id="verdict"></div>
+      <div class="res" id="res" hidden>
+        <div class="ok"><b id="r202">–</b><span>202 RESERVED<br>예약 성공</span></div>
+        <div class="warn"><b id="r409">–</b><span>409 sold-out<br>재고 소진, 즉시 응답</span></div>
+        <div class="warn"><b id="r409d">–</b><span>409 duplicate-user<br>같은 유저 중복</span></div>
+        <div class="crit"><b id="r5xx">–</b><span>5xx / 네트워크 오류</span></div>
+        <div><b id="rp50">–</b><span>p50 (브라우저 왕복)</span></div>
+        <div><b id="rp99">–</b><span>p99 (브라우저 왕복)</span></div>
+      </div>
+      <pre class="log" id="log" hidden></pre>
+      <p class="note">데모 상품 ID는 <code>9001</code>로, 부하 테스트가 쓰는 상품과 분리돼 있습니다. 브라우저에서 쏘는 것이라 여기 찍히는 지연에는 네트워크 왕복이 포함됩니다 — 서버 내부 지연은 아래 k6 실측 표를 보세요.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>구조</h2>
+    <p class="lead">핫패스는 Redis Lua 스크립트 한 번(확인 + 차감 + 중복 체크 + 예약 기록)으로 끝내고, 결제·DB 적재 같은 무거운 일은 아웃박스 → Kafka로 떼어냈습니다.</p>
+    <div class="card">
+<pre class="arch">client ─▶ Traefik ─▶ [flashgate-api ×2]   Kotlin · Spring Boot · 가상 스레드
+                          │  POST /api/orders  { productId, userId } + Idempotency-Key
+                          │
+                          ▼  EVALSHA reserve.lua   재고 확인 + 차감 + 유저 중복 체크 + 예약 기록 = 1 round-trip
+                    [Redis  master + replica×2 + sentinel×3]
+                          │  성공하면 같은 트랜잭션에서 outbox INSERT → 202 { orderId, status: RESERVED }
+                          ▼
+                    [Kafka] order.reserved  ◀── outbox relay (100ms 폴링, SKIP LOCKED)
+                          │
+                          ▼
+                    [확정 컨슈머]  결제 모의 승인 → MySQL orders 적재 → order.confirmed
+                          │        실패하면 compensate.lua 로 재고 복원 + order.cancelled
+                          ▼
+                    GET /api/orders/{id}  →  RESERVED | CONFIRMED | CANCELLED</pre>
+      <ul class="tight">
+        <li><strong>왜 Lua인가</strong> — 확인·차감·기록을 한 번의 라운드트립으로 원자화해 락 없이 정확합니다. 대안(DB 행 락, Redisson 분산락)을 같은 부하로 실측해 비교했습니다.</li>
+        <li><strong>중복 주문 방어 3중</strong> — Lua 안의 유저 중복 체크, <code>Idempotency-Key</code>(Redis SETNX, TTL 24h), 컨슈머의 유니크 제약.</li>
+        <li><strong>재고 정합</strong> — 트랜잭셔널 아웃박스(at-least-once) + 실패 시 보상 + 1분마다 <code>초기 재고 = Redis 잔여 + 확정 + 취소</code> 대사, 어긋나면 메트릭 알람.</li>
+        <li><strong>장애 대응</strong> — Sentinel 자동 failover, Resilience4j Retry + CircuitBreaker. 서킷이 열린 동안은 큐잉 대신 <code>503 + Retry-After</code>로 빠르게 실패시켜 지연 폭증을 막습니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>실측</h2>
+    <p class="lead">로컬 Docker(Apple Silicon) · 앱 2대 + Sentinel 3 + Kafka + MySQL + Traefik · k6 v2.2. 모든 수치는 저장소의 <code>k6/results/*.md</code>에서 재현할 수 있습니다.</p>
+    <div class="card">
+      <table>
+        <thead><tr><th>시나리오</th><th class="num">요청</th><th class="num">처리량</th><th class="num">p50</th><th class="num">p99</th><th class="num">실패</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>spike — 재고 100, 5,000 유저가 3초간</td><td class="num">15,149</td><td class="num">1,512 rps</td><td class="num">1.04 ms</td><td class="num">14.8 ms</td><td class="num">0%</td><td>예약 성공 정확히 100건</td></tr>
+          <tr><td>ramp — 100→1,000 rps</td><td class="num">39,000</td><td class="num">709 rps</td><td class="num">2.39 ms</td><td class="num">42.7 ms</td><td class="num">0%</td><td>Sentinel 경유</td></tr>
+          <tr><td>chaos — Redis 마스터 강제 종료</td><td class="num">18,001</td><td class="num">300 rps</td><td class="num">1.86 ms</td><td class="num">203 ms</td><td class="num">5.67%</td><td>전부 503(빠른 실패), 500·타임아웃 0. 튜닝 전 500 13.5%</td></tr>
+          <tr><td>chaos — 앱 1대 SIGKILL</td><td class="num">18,002</td><td class="num">300 rps</td><td class="num">2.00 ms</td><td class="num">35.2 ms</td><td class="num">0.10%</td><td>Traefik retry 적용 전 1.5%</td></tr>
+        </tbody>
+      </table>
+      <h2 style="font-size:15px;margin:18px 0 4px">재고 차감 전략 비교 (같은 부하, 709 rps 포화)</h2>
+      <table>
+        <thead><tr><th>전략</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">5xx</th><th>메모</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Redis Lua</strong> (Sentinel 경유)</td><td class="num">2.39</td><td class="num">23.98</td><td class="num">42.65</td><td class="num">0%</td><td>채택</td></tr>
+          <tr><td>Redis Lua (직접 연결)</td><td class="num">0.88</td><td class="num">1.97</td><td class="num">4.32</td><td class="num">0%</td><td>Sentinel 경유가 p95 12배 느림 — 원인 분석 중</td></tr>
+          <tr><td>DB 행 락 <code>SELECT … FOR UPDATE</code></td><td class="num">1.58</td><td class="num">5.40</td><td class="num">13.18</td><td class="num">0%</td><td>이 규모에선 충분히 빠르다</td></tr>
+          <tr><td>Redisson 분산락</td><td class="num">2.14</td><td class="num">8.85</td><td class="num">18.14</td><td class="num">50.0%</td><td>경합이 지연이 아니라 실패율로 전이</td></tr>
+        </tbody>
+      </table>
+      <p class="note">초과판매 0건은 네 전략 모두 동일합니다. 정확성이 아니라 지연과 실패율이 갈립니다 — 이것이 이 프로젝트의 결론입니다.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    개인 사이드 프로젝트 · GitHub Actions → GHCR → k3s 롤링 배포 ·
+    <a href="https://github.com/geumyeongchoi/flashgate" target="_blank" rel="noopener">github.com/geumyeongchoi/flashgate</a> ·
+    <a href="https://geumyeongchoi.github.io" target="_blank" rel="noopener">포트폴리오</a>
+  </div>
+</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const DEMO_PRODUCT = 9001;
+const log = (s) => { const el = $('#log'); el.hidden = false; el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; };
+const pct = (arr, p) => { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; };
+
+fetch('/actuator/health').then(r => r.json()).then(j => {
+  const el = $('#health');
+  el.textContent = j.status === 'UP' ? '서버 UP' : '서버 ' + j.status;
+  el.className = 'pill ' + (j.status === 'UP' ? 'up' : 'down');
+}).catch(() => { const el = $('#health'); el.textContent = '서버 응답 없음'; el.className = 'pill down'; });
+
+async function reserve(userId) {
+  const t0 = performance.now();
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': userId + ':' + DEMO_PRODUCT },
+      body: JSON.stringify({ productId: DEMO_PRODUCT, userId }),
+    });
+    let body = null; try { body = await res.json(); } catch (e) {}
+    return { status: res.status, ms: performance.now() - t0, body };
+  } catch (e) {
+    return { status: 0, ms: performance.now() - t0, body: { detail: String(e) } };
+  }
+}
+
+$('#run').onclick = async () => {
+  const qty = Math.max(1, Math.min(5000, +$('#qty').value || 100));
+  const n = Math.max(1, Math.min(1000, +$('#n').value || 300));
+  $('#run').disabled = true; $('#dup').disabled = true;
+  $('#log').textContent = ''; $('#verdict').style.display = 'none'; $('#res').hidden = false;
+
+  const run = Date.now().toString(36);
+  log('POST /api/admin/products/' + DEMO_PRODUCT + '/stock  { quantity: ' + qty + ' }');
+  const init = await fetch('/api/admin/products/' + DEMO_PRODUCT + '/stock', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quantity: qty, name: 'demo' }),
+  }).then(r => r.json());
+  log('→ ' + JSON.stringify(init));
+  log('');
+  log(n + '건을 동시에 POST /api/orders …');
+
+  const t0 = performance.now();
+  const results = await Promise.all(Array.from({ length: n }, (_, i) => reserve('demo-' + run + '-' + i)));
+  const wall = performance.now() - t0;
+
+  const c202 = results.filter(r => r.status === 202).length;
+  const dup = results.filter(r => r.status === 409 && r.body && r.body.type && String(r.body.type).includes('duplicate')).length;
+  const sold = results.filter(r => r.status === 409).length - dup;
+  const bad = results.filter(r => r.status >= 500 || r.status === 0).length;
+  const ms = results.map(r => r.ms);
+
+  $('#r202').textContent = c202.toLocaleString();
+  $('#r409').textContent = sold.toLocaleString();
+  $('#r409d').textContent = dup.toLocaleString();
+  $('#r5xx').textContent = bad.toLocaleString();
+  $('#rp50').textContent = pct(ms, .5).toFixed(0) + ' ms';
+  $('#rp99').textContent = pct(ms, .99).toFixed(0) + ' ms';
+
+  const stock = await fetch('/api/admin/products/' + DEMO_PRODUCT + '/stock').then(r => r.json());
+  log('→ ' + n + '건 완료, 벽시계 ' + wall.toFixed(0) + 'ms');
+  log('GET /api/admin/products/' + DEMO_PRODUCT + '/stock');
+  log('→ ' + JSON.stringify(stock));
+  const sample = results.find(r => r.status === 202);
+  if (sample) log('\n202 응답 예시 → ' + JSON.stringify(sample.body));
+  const soldSample = results.find(r => r.status === 409);
+  if (soldSample) log('409 응답 예시 (RFC 9457 problem+json) → ' + JSON.stringify(soldSample.body));
+
+  const expected = Math.min(qty, n);
+  const v = $('#verdict');
+  const oversold = c202 > expected;
+  v.style.display = 'block';
+  if (!oversold && bad === 0 && c202 === expected) {
+    v.className = 'verdict pass';
+    v.textContent = '초과판매 0건 — 재고 ' + qty + '에 ' + n + '건이 동시에 들어와 정확히 ' + c202 + '건만 예약되고 나머지는 409로 떨어졌습니다. 서버 잔여 재고 ' + stock.remaining + ', 예약 ' + stock.reserved + '건.';
+  } else if (oversold) {
+    v.className = 'verdict fail';
+    v.textContent = '초과판매 ' + (c202 - expected) + '건 — 재고보다 많이 예약되었습니다.';
+  } else {
+    v.className = 'verdict pass';
+    v.textContent = '예약 ' + c202 + '건 / 기대 ' + expected + '건 · 5xx ' + bad + '건. 서버 잔여 재고 ' + stock.remaining + ', 예약 ' + stock.reserved + '건.';
+  }
+  $('#run').disabled = false; $('#dup').disabled = false;
+};
+
+$('#dup').onclick = async () => {
+  $('#run').disabled = true; $('#dup').disabled = true;
+  $('#log').textContent = ''; $('#verdict').style.display = 'none'; $('#res').hidden = true;
+  const uid = 'idem-' + Date.now().toString(36);
+  log('재고를 다시 채운 뒤, 같은 유저 · 같은 Idempotency-Key 로 두 번 호출합니다.');
+  const qty0 = Math.max(1, Math.min(5000, +$('#qty').value || 100));
+  const init0 = await fetch('/api/admin/products/' + DEMO_PRODUCT + '/stock', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quantity: qty0, name: 'demo' }),
+  }).then(r => r.json());
+  log('POST …/stock { quantity: ' + qty0 + ' } → ' + JSON.stringify(init0));
+  log('');
+  const a = await reserve(uid);
+  log('1회차 → ' + a.status + ' ' + JSON.stringify(a.body));
+  const b = await reserve(uid);
+  log('2회차 → ' + b.status + ' ' + JSON.stringify(b.body));
+  const v = $('#verdict');
+  v.style.display = 'block';
+  const same = a.body && b.body && a.body.orderId && a.body.orderId === b.body.orderId;
+  v.className = 'verdict ' + (same ? 'pass' : 'fail');
+  const st = await fetch('/api/admin/products/' + DEMO_PRODUCT + '/stock').then(r => r.json());
+  log('GET …/stock → ' + JSON.stringify(st));
+  v.textContent = same
+    ? '멱등 동작 확인 — 두 번 호출했지만 예약은 ' + st.reserved + '건. 두 번째 요청은 재고를 다시 깎지 않고 첫 응답의 주문 번호 ' + a.body.orderId + ' 를 그대로 돌려줬습니다. (잔여 재고 ' + st.remaining + ' / ' + st.initial + ')'
+    : '재고가 소진되었거나 응답이 달랐습니다. 재고 수량을 조정한 뒤 다시 눌러 보세요.';
+  $('#run').disabled = false; $('#dup').disabled = false;
+};
+</script>
+</body>
+</html>
