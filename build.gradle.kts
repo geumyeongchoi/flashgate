@@ -69,6 +69,7 @@ ktlint {
 // jib: ./gradlew jib --image=ghcr.io/<user>/flashgate:<tag>   (Actions 에서 실행, 로컬은 jibDockerBuild)
 jib {
     from { image = "eclipse-temurin:21-jre" }
+    to { tags = setOf("latest") } // --image 의 태그 + latest 를 함께 push (-Djib.to.tags 는 Gradle 플러그인에서 무시됨)
     container {
         ports = listOf("8080")
         jvmFlags = listOf("-Djava.security.egd=file:/dev/./urandom") // GC·힙은 배포 환경(JAVA_TOOL_OPTIONS)에서 결정

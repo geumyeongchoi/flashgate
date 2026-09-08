@@ -35,7 +35,7 @@ jobs:
         with: { distribution: temurin, java-version: '21', cache: gradle }
       - id: meta
         run: echo "tag=$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - run: ./gradlew jib --image="$IMAGE:${{ steps.meta.outputs.tag }}" -Djib.to.tags=latest -Djib.to.auth.username=${{ github.actor }} -Djib.to.auth.password=${{ secrets.GITHUB_TOKEN }} --no-daemon
+      - run: ./gradlew jib --image="$IMAGE:${{ steps.meta.outputs.tag }}" -Djib.to.auth.username=${{ github.actor }} -Djib.to.auth.password=${{ secrets.GITHUB_TOKEN }} --no-daemon
 
   deploy:
     needs: build-push
